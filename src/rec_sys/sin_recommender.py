@@ -4,7 +4,6 @@ import numpy as np
 # Data Science
 from scipy.sparse import csr_matrix
 from sklearn.decomposition import TruncatedSVD
-from sklearn.neighbors import NearestNeighbors
 
 # utils
 import os
@@ -56,7 +55,6 @@ class KNNRecommender:
                                                                                     self.movie_threshold,
                                                                                     self.normalize)
         self.movie_features = self._get_movie_features()
-        self.model = NearestNeighbors()
 
     @staticmethod
     def _data_prep(ratings, movies, user_threshold, movie_threshold, normalize):
@@ -113,23 +111,25 @@ class KNNRecommender:
         '''
         movie_svd = TruncatedSVD(n_components=self.svd_features, random_state=42)
         filled_matrix = movie_svd.fit_transform(self.movie_user)
-        print(filled_matrix.shape)
+
         return filled_matrix
 
-    def set_model_params(self, n_neighbors, algo, metric, njobs):
+    @staticmethod
+    def _cosine_similarity(movie_vector, total_movie_features):
         '''
-        Setting model parameters to a custom ones
+        Calculates cosine similarity between a vector and the rest of the data
+        :param
+            - movie_vector - vectorized representation of a movie in the dataset
+            - total_movie_features - vectorized representations of all movies
+        :return:
+            - a similarity with each movie
+        '''
 
-        :param n_neighbors:
-        :param algo:
-        :param metric:
-        :param njobs:
-        '''
-        self.model.set_params(**{
-            'n_neighbors': n_neighbors,
-            'algorithm': algo,
-            'metric': metric,
-            'n_jobs': njobs})
+        dot_products = np.dot(movie_vector, total_movie_features.T)
+        magnitude = (np.sqrt((movie_vector ** 2).sum()) * np.sqrt((total_movie_features ** 2).sum(axis=1)))
+        similarities = dot_products / magnitude
+
+        return similarities
 
     def _fuzzy_matching(self, fav_movie):
         """
@@ -157,31 +157,6 @@ class KNNRecommender:
                   '{0}\n'.format([x[0] for x in match_tuple]))
             return match_tuple[0][1]
 
-    @staticmethod
-    def _distance(movie_vector, total_movie_features, model, top_n):
-        '''
-        Calculates distance between a vector and the rest of the data
-        :param
-            - movie_vector - vectorized representation of a movie in the dataset
-            - total_movie_features - vectorized representations of all movies
-        :return:
-            - top_n smallest distances between fav movie and rest
-        '''
-        model.fit(total_movie_features)
-        distances, indices = model.kneighbors(
-            movie_vector,
-            n_neighbors=top_n+1
-        )
-        # print(distances, indices)
-        # print(distances.shape, indices.shape)
-        sort_dist_indx = sorted(
-            list(
-                zip(distances.flatten(), indices.flatten())
-            ),
-            key=lambda x: x[0]
-        )
-        return sort_dist_indx
-
     def make_recommendations(self, movie_name, top_n):
         '''
         Given a movie name - return a list of top n recommendations (movies with highest cosine similarity
@@ -194,16 +169,13 @@ class KNNRecommender:
         t0 = time.time()
         top_recs = []
         closest_movie_idx = self._fuzzy_matching(movie_name)
-        movie_vec = self.movie_features[closest_movie_idx, :].reshape(1,-1)
-        # print(movie_vec)
-        # print(closest_movie_idx)
-        sort_dist_indx = self._distance(movie_vec, self.movie_features, self.model, top_n)
-        for i, val in enumerate(sort_dist_indx[1:]):
-            dist = val[0]
-            idx = val[1]
-            print('{0}: {1}, with distance '
-                  'of {2}'.format(i + 1, self.ind2movie_dict[idx], dist))
-            top_recs.append(self.ind2movie_dict[idx])
+        movie_vec = self.movie_features[closest_movie_idx, :]
+        similarities = self._cosine_similarity(movie_vec, self.movie_features)
+
+        for i, indx in enumerate(np.argsort(-similarities)[1:top_n+1]):
+            print('{0}: {1}, with similarity '
+                  'of {2}'.format(i + 1, self.ind2movie_dict[indx], similarities[indx]))
+            top_recs.append(self.ind2movie_dict[indx])
         t1 = time.time()
         print('It took {:.2f}s to make inference \n\
                       '.format(t1 - t0))
@@ -239,8 +211,8 @@ if __name__ == '__main__':
     top_n = args.top_n
     svd_features = args.svd_features
     # filter params
-    user_threshold=5.
-    movie_threshold=4.
+    user_threshold=4.
+    movie_threshold=8.
     normalize=False
     # initial recommender system
     recommender = KNNRecommender(
@@ -251,11 +223,6 @@ if __name__ == '__main__':
         svd_features,
         normalize
     )
-    # set model params
-    algo = 'brute'
-    metric = 'euclidean'
-    njobs = -1
-    recommender.set_model_params(top_n, algo, metric, njobs)
 
     # make recommendations
     recommender.make_recommendations(movie_name, top_n)
